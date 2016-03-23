@@ -28,14 +28,15 @@ package java.lang.module;
 import java.io.InputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.math.BigInteger;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
+import java.text.Normalizer;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -503,140 +504,223 @@ public class ModuleDescriptor
 
         private final String version;
 
-        // If Java had disjunctive types then we'd write List<Integer|String> here
-        //
-        private final List<Object> sequence;
-        private final List<Object> pre;
-        private final List<Object> build;
+        private static final int TOK_INITIAL = 0;
+        private static final int TOK_PART_NUMBER = 1;
+        private static final int TOK_PART_ALPHA = 2;
+        private static final int TOK_SEP = 3;
+        private static final int TOK_SEP_EMPTY = 4;
 
-        // Take a numeric token starting at position i
-        // Append it to the given list
-        // Return the index of the first character not taken
-        // Requires: s.charAt(i) is (decimal) numeric
-        //
-        private static int takeNumber(String s, int i, List<Object> acc) {
-            char c = s.charAt(i);
-            int d = (c - '0');
-            int n = s.length();
-            while (++i < n) {
-                c = s.charAt(i);
-                if (c >= '0' && c <= '9') {
-                    d = d * 10 + (c - '0');
-                    continue;
+        final boolean hasNext(long cookie) {
+            return cookieToEndIndex(cookie) < version.length();
+        }
+
+        /**
+         * Go to the next token.
+         *
+         * @param cookie the cookie ({@code 0L} indicates start of search)
+         * @return the next cookie value in the token sequence
+         * @throws IllegalArgumentException if the next token is not a valid token or the string is too long
+         */
+        final long next(long cookie) throws IllegalArgumentException {
+            int start, end, token;
+            // get old end value
+            end = cookieToEndIndex(cookie);
+            final String version = this.version;
+            final int length = version.length();
+            // hasNext() should have been called first on this cookie value
+            assert end < length;
+            start = end;
+            int cp = version.codePointAt(start);
+            // examine the previous token
+            token = cookieToToken(cookie);
+            if (token == TOK_PART_NUMBER && isValidAlphaPart(cp) || token == TOK_PART_ALPHA && isValidNumberPart(cp)) {
+                token = TOK_SEP_EMPTY;
+                end = start;
+            } else if ((token == TOK_INITIAL || token == TOK_SEP || token == TOK_SEP_EMPTY) && isValidAlphaPart(cp)) {
+                token = TOK_PART_ALPHA;
+                end = length;
+                // find end
+                for (int i = start; i < length; i = version.offsetByCodePoints(i, 1)) {
+                    cp = version.codePointAt(i);
+                    if (! isValidAlphaPart(cp)) {
+                        end = i;
+                        break;
+                    }
                 }
-                break;
+            } else if ((token == TOK_INITIAL || token == TOK_SEP || token == TOK_SEP_EMPTY) && isValidNumberPart(cp)) {
+                token = TOK_PART_NUMBER;
+                end = length;
+                // find end
+                for (int i = start; i < length; i = version.offsetByCodePoints(i, 1)) {
+                    cp = version.codePointAt(i);
+                    if (! isValidNumberPart(cp)) {
+                        end = i;
+                        break;
+                    }
+                }
+            } else if ((token == TOK_PART_NUMBER || token == TOK_PART_ALPHA) && isValidSeparator(cp)) {
+                token = TOK_SEP;
+                end = version.offsetByCodePoints(start, 1);
+            } else {
+                throw new IllegalArgumentException("Invalid version code point \"" + new String(Character.toChars(cp)) + "\" at offset " + start + " of \"" + version + "\"");
             }
-            acc.add(d);
-            return i;
+            if (end > (1 << 28) - 1) {
+                throw new IllegalArgumentException("Version string is too long");
+            }
+            assert end >= start;
+            return ((long) start) | ((long) end << 28) | ((long) token << 56);
         }
 
-        // Take a string token starting at position i
-        // Append it to the given list
-        // Return the index of the first character not taken
-        // Requires: s.charAt(i) is not '.'
-        //
-        private static int takeString(String s, int i, List<Object> acc) {
-            int b = i;
-            int n = s.length();
-            while (++i < n) {
-                char c = s.charAt(i);
-                if (c != '.' && c != '-' && c != '+' && !(c >= '0' && c <= '9'))
-                    continue;
-                break;
-            }
-            acc.add(s.substring(b, i));
-            return i;
+        /**
+         * Get the token start index from the cookie.  The start index is stored in the lowest 28 bits (bits 0-27) of the cookie.
+         *
+         * @param cookie the cookie
+         * @return the start character index in the version string
+         */
+        static int cookieToStartIndex(long cookie) {
+            return (int) (cookie & 0xfff_ffff);
         }
 
-        // Syntax: tok+ ( '-' tok+)? ( '+' tok+)?
-        // First token string is sequence, second is pre, third is build
-        // Tokens are separated by '.' or '-', or by changes between alpha & numeric
-        // Numeric tokens are compared as decimal integers
-        // Non-numeric tokens are compared lexicographically
-        // A version with a non-empty pre is less than a version with same seq but no pre
-        // Tokens in build may contain '-' and '+'
-        //
+        /**
+         * Get the token end index from the cookie.  The end index is stored in the second 28 bits (bits 28-55) of the cookie.
+         *
+         * @param cookie the cookie
+         * @return the end character index in the version string
+         */
+        static int cookieToEndIndex(long cookie) {
+            return (int) ((cookie >> 28) & 0xfff_ffff);
+        }
+
+        /**
+         * Get the token type from the cookie.  The token type is stored in bits 56 and up in the cookie.
+         * The value will be one of:
+         * <ul>
+         *     <li>{@link #TOK_PART_NUMBER}</li>
+         *     <li>{@link #TOK_PART_ALPHA}</li>
+         *     <li>{@link #TOK_SEP}</li>
+         *     <li>{@link #TOK_SEP_EMPTY}</li>
+         * </ul>
+         *
+         * @param cookie the cookie
+         * @return the token value
+         */
+        static int cookieToToken(long cookie) {
+            return (int) (cookie >> 56);
+        }
+
+        static int sepMagnitude(int codePoint) {
+            switch (codePoint) {
+                case '.': return 1;
+                case '-': return 2;
+                case '+': return 3;
+                case '_': return 4;
+                default: throw new IllegalStateException();
+            }
+        }
+
+        static int compareSep(int sep1, int sep2) {
+            return Integer.signum(sepMagnitude(sep1) - sepMagnitude(sep2));
+        }
+
+        static boolean isValidAlphaPart(int codePoint) {
+            return Character.isLetter(codePoint);
+        }
+
+        static boolean isValidNumberPart(int codePoint) {
+            // Use this instead of isDigit(cp) in case a valid digit is not a valid decimal digit
+            return Character.digit(codePoint, 10) != -1;
+        }
+
+        static boolean isValidSeparator(int codePoint) {
+            return codePoint == '.' || codePoint == '-' || codePoint == '+' || codePoint == '_';
+        }
+
+        final int comparePart(long cookie, Version other, long otherCookie) {
+            final int token = cookieToToken(cookie);
+            final int otherToken = cookieToToken(otherCookie);
+            final int start = cookieToStartIndex(cookie);
+            final int otherStart = cookieToStartIndex(cookie);
+            final int end = cookieToEndIndex(cookie);
+            final int otherEnd = cookieToEndIndex(otherCookie);
+            switch (token) {
+                case TOK_PART_NUMBER: {
+                    if (otherToken == TOK_PART_ALPHA) {
+                        return 1;
+                    }
+                    assert otherToken == TOK_PART_NUMBER;
+                    // we need the length in digits, not in characters
+                    final int digits = version.codePointCount(start, end);
+                    final int otherDigits = other.version.codePointCount(otherStart, otherEnd);
+                    // if one is shorter, we need to pad it out with invisible zeros for the value comparison
+                    // otherwise, compare digits naively from left to right
+                    int res;
+                    // in this loop, i represents the place with a higher # being more significant
+                    for (int i = Math.max(digits, otherDigits) - 1; i >= 0; i --) {
+                        // if the value has no digit at location 'i', i.e. i > length, then the effective value is 0
+                        int a = i >= digits ? 0 : Character.digit(version.codePointBefore(version.offsetByCodePoints(end, -i)), 10);
+                        int b = i >= otherDigits ? 0 : Character.digit(other.version.codePointBefore(other.version.offsetByCodePoints(otherEnd, -i)), 10);
+                        res = Integer.signum(a - b);
+                        if (res != 0) {
+                            return res;
+                        }
+                    }
+                    // equal, so now the shortest wins
+                    return Integer.signum(digits - otherDigits);
+                }
+                case TOK_PART_ALPHA: {
+                    if (otherToken == TOK_PART_NUMBER) {
+                        return -1;
+                    }
+                    assert otherToken == TOK_PART_ALPHA;
+                    // compare string naively from left to right
+                    for (int i = start; i < Math.min(end, otherEnd); i = version.offsetByCodePoints(i, 1)) {
+                        int cp = version.codePointAt(i);
+                        int ocp = other.version.codePointAt(i);
+                        assert isValidAlphaPart(cp) && isValidAlphaPart(ocp);
+                        int res = Integer.signum(cp - ocp);
+                        if (res != 0) {
+                            return res;
+                        }
+                    }
+                    // identical prefix; fall back to length comparison
+                    return Integer.signum(end - otherEnd);
+                }
+                case TOK_SEP: {
+                    if (otherToken == TOK_SEP_EMPTY) {
+                        return 1;
+                    } else {
+                        assert otherToken == TOK_SEP;
+                        return compareSep(version.codePointAt(start), other.version.codePointAt(cookieToStartIndex(otherCookie)));
+                    }
+                }
+                case TOK_SEP_EMPTY: {
+                    return otherToken == TOK_SEP_EMPTY ? 0 : -1;
+                }
+                default: throw new IllegalStateException();
+            }
+        }
+
         private Version(String v) {
-
             if (v == null)
                 throw new IllegalArgumentException("Null version string");
-            int n = v.length();
-            if (n == 0)
-                throw new IllegalArgumentException("Empty version string");
 
-            int i = 0;
-            char c = v.charAt(i);
-            if (!(c >= '0' && c <= '9'))
-                throw new IllegalArgumentException(v
-                                                   + ": Version string does not start"
-                                                   + " with a number");
-
-            List<Object> sequence = new ArrayList<>(4);
-            List<Object> pre = new ArrayList<>(2);
-            List<Object> build = new ArrayList<>(2);
-
-            i = takeNumber(v, i, sequence);
-
-            while (i < n) {
-                c = v.charAt(i);
-                if (c == '.') {
-                    i++;
-                    continue;
-                }
-                if (c == '-' || c == '+') {
-                    i++;
-                    break;
-                }
-                if (c >= '0' && c <= '9')
-                    i = takeNumber(v, i, sequence);
-                else
-                    i = takeString(v, i, sequence);
-            }
-
-            if (c == '-' && i >= n)
-                throw new IllegalArgumentException(v + ": Empty pre-release");
-
-            while (i < n) {
-                c = v.charAt(i);
-                if (c >= '0' && c <= '9')
-                    i = takeNumber(v, i, pre);
-                else
-                    i = takeString(v, i, pre);
-                if (i >= n)
-                    break;
-                c = v.charAt(i);
-                if (c == '.' || c == '-') {
-                    i++;
-                    continue;
-                }
-                if (c == '+') {
-                    i++;
-                    break;
-                }
-            }
-
-            if (c == '+' && i >= n)
-                throw new IllegalArgumentException(v + ": Empty pre-release");
-
-            while (i < n) {
-                c = v.charAt(i);
-                if (c >= '0' && c <= '9')
-                    i = takeNumber(v, i, build);
-                else
-                    i = takeString(v, i, build);
-                if (i >= n)
-                    break;
-                c = v.charAt(i);
-                if (c == '.' || c == '-' || c == '+') {
-                    i++;
-                    continue;
-                }
-            }
-
+            // TODO: Normalizer calls class.getResourceAsStream, which in turn requires a module to already be assigned to the class, resulting in NPE at boot
+//            this.version = Normalizer.normalize(v, Normalizer.Form.NFKC);
             this.version = v;
-            this.sequence = sequence;
-            this.pre = pre;
-            this.build = build;
+
+            // validate
+            if (! hasNext(0L)) {
+                throw new IllegalArgumentException("Empty version string");
+            }
+            long cookie = next(0L);
+            while (hasNext(cookie)) {
+                cookie = next(cookie);
+            }
+
+            final int lastToken = cookieToToken(cookie);
+            if (lastToken == TOK_SEP || lastToken == TOK_SEP_EMPTY) {
+                throw new IllegalArgumentException("Version ends with a separator");
+            }
         }
 
         /**
@@ -655,39 +739,13 @@ public class ModuleDescriptor
             return new Version(v);
         }
 
-        @SuppressWarnings("unchecked")
-        private int cmp(Object o1, Object o2) {
-            return ((Comparable)o1).compareTo(o2);
-        }
-
-        private int compareTokens(List<Object> ts1, List<Object> ts2) {
-            int n = Math.min(ts1.size(), ts2.size());
-            for (int i = 0; i < n; i++) {
-                Object o1 = ts1.get(i);
-                Object o2 = ts2.get(i);
-                if ((o1 instanceof Integer && o2 instanceof Integer)
-                    || (o1 instanceof String && o2 instanceof String))
-                {
-                    int c = cmp(o1, o2);
-                    if (c == 0)
-                        continue;
-                    return c;
-                }
-                // Types differ, so convert number to string form
-                int c = o1.toString().compareTo(o2.toString());
-                if (c == 0)
-                    continue;
-                return c;
-            }
-            List<Object> rest = ts1.size() > ts2.size() ? ts1 : ts2;
-            int e = rest.size();
-            for (int i = n; i < e; i++) {
-                Object o = rest.get(i);
-                if (o instanceof Integer && ((Integer)o) == 0)
-                    continue;
-                return ts1.size() - ts2.size();
-            }
-            return 0;
+        /**
+         * Construct a new iterator over the parts of this version string.
+         *
+         * @return the iterator
+         */
+        public Iterator iterator() {
+            return new Iterator();
         }
 
         /**
@@ -703,16 +761,23 @@ public class ModuleDescriptor
          */
         @Override
         public int compareTo(Version that) {
-            int c = compareTokens(this.sequence, that.sequence);
-            if (c != 0) return c;
-            if (this.pre.isEmpty()) {
-                if (!that.pre.isEmpty()) return +1;
-            } else {
-                if (that.pre.isEmpty()) return -1;
+            long cookie = 0L;
+            long thatCookie = 0L;
+            int res;
+
+            while (hasNext(cookie)) {
+                cookie = next(cookie);
+                if (that.hasNext(thatCookie)) {
+                    thatCookie = that.next(thatCookie);
+                    res = comparePart(cookie, that, thatCookie);
+                    if (res != 0) {
+                        return res;
+                    }
+                } else {
+                    return 1;
+                }
             }
-            c = compareTokens(this.pre, that.pre);
-            if (c != 0) return c;
-            return compareTokens(this.build, that.build);
+            return that.hasNext(thatCookie) ? - 1 : 0;
         }
 
         /**
@@ -753,15 +818,220 @@ public class ModuleDescriptor
         }
 
         /**
-         * Returns the string from which this version was parsed.
+         * Returns the normalized string representation of this version.
          *
-         * @return The string from which this version was parsed.
+         * @return The normalized string.
          */
         @Override
         public String toString() {
             return version;
         }
 
+        /**
+         * An iterator over the parts of a version.
+         */
+        public class Iterator {
+            long cookie = 0L;
+
+            Iterator() {
+            }
+
+            /**
+             * Determine whether another token exists in this version.
+             *
+             * @return {@code true} if more tokens remain, {@code false} otherwise
+             */
+            public boolean hasNext() {
+                return Version.this.hasNext(cookie);
+            }
+
+            /**
+             * Move to the next token.
+             *
+             * @throws NoSuchElementException if there are no more tokens to iterate
+             */
+            public void next() {
+                final long cookie = this.cookie;
+                if (! Version.this.hasNext(cookie)) {
+                    throw new NoSuchElementException();
+                }
+                this.cookie = Version.this.next(cookie);
+            }
+
+            /**
+             * Get the length of the current token.  If there is no current token, zero is returned.
+             *
+             * @return the length of the current token
+             */
+            public int length() {
+                final long cookie = this.cookie;
+                return cookieToEndIndex(cookie) - cookieToStartIndex(cookie);
+            }
+
+            /**
+             * Determine if the current token is some kind of separator (a character or a zero-length alphabetical-to-numeric
+             * or numeric-to-alphabetical transition).
+             *
+             * @return {@code true} if the token is a separator, {@code false} otherwise
+             */
+            public boolean isSeparator() {
+                final int token = cookieToToken(cookie);
+                return token == TOK_SEP_EMPTY || token == TOK_SEP;
+            }
+
+            /**
+             * Determine if the current token is some kind of part (alphabetical or numeric).
+             *
+             * @return {@code true} if the token is a separator, {@code false} otherwise
+             */
+            public boolean isPart() {
+                final int token = cookieToToken(cookie);
+                return token == TOK_PART_ALPHA || token == TOK_PART_NUMBER;
+            }
+
+            /**
+             * Determine if the current token is an empty (or zero-length alphabetical-to-numeric
+             * or numeric-to-alphabetical) separator.
+             *
+             * @return {@code true} if the token is an empty separator, {@code false} otherwise
+             */
+            public boolean isEmptySeparator() {
+                return cookieToToken(cookie) == TOK_SEP_EMPTY;
+            }
+
+            /**
+             * Determine if the current token is a non-empty separator.
+             *
+             * @return {@code true} if the token is a non-empty separator, {@code false} otherwise
+             */
+            public boolean isNonEmptySeparator() {
+                return cookieToToken(cookie) == TOK_SEP;
+            }
+
+            /**
+             * Get the code point of the current separator.  If the iterator is not positioned on a non-empty separator
+             * (i.e. {@link #isNonEmptySeparator()} returns {@code false}), then an exception is thrown.
+             *
+             * @return the code point of the current separator
+             * @throws IllegalStateException if the current token is not a non-empty separator
+             */
+            public int getSeparatorCodePoint() {
+                final long cookie = this.cookie;
+                if (cookieToToken(cookie) != TOK_SEP) {
+                    throw new IllegalStateException();
+                }
+                return version.codePointAt(cookieToStartIndex(cookie));
+            }
+
+            /**
+             * Determine if the current token is an alphabetical part.
+             *
+             * @return {@code true} if the token is an alphabetical part, {@code false} otherwise
+             */
+            public boolean isAlphaPart() {
+                return cookieToToken(cookie) == TOK_PART_ALPHA;
+            }
+
+            /**
+             * Determine if the current token is a numeric part.
+             *
+             * @return {@code true} if the token is a numeric part, {@code false} otherwise
+             */
+            public boolean isNumberPart() {
+                return cookieToToken(cookie) == TOK_PART_NUMBER;
+            }
+
+            /**
+             * Get the current alphabetical part.  If the iterator is not positioned on an alphabetical part (i.e.
+             * {@link #isAlphaPart()} returns {@code false}), then an exception is thrown.
+             *
+             * @return the current alphabetical part
+             * @throws IllegalStateException if the current token is not an alphabetical part
+             */
+            public String getAlphaPart() {
+                final long cookie = this.cookie;
+                if (cookieToToken(cookie) != TOK_PART_ALPHA) {
+                    throw new IllegalStateException();
+                }
+                return version.substring(cookieToStartIndex(cookie), cookieToEndIndex(cookie));
+            }
+
+            /**
+             * Get the current numeric part, as a {@code String}.  If the iterator is not positioned on a numeric
+             * part (i.e. {@link #isNumberPart()} returns {@code false}), then an exception is thrown.
+             *
+             * @return the current numeric part as a {@code String}
+             * @throws IllegalStateException if the current token is not a numeric part
+             */
+            public String getNumberPartAsString() {
+                final long cookie = this.cookie;
+                if (cookieToToken(cookie) != TOK_PART_NUMBER) {
+                    throw new IllegalStateException();
+                }
+                return version.substring(cookieToStartIndex(cookie), cookieToEndIndex(cookie));
+            }
+
+            /**
+             * Get the current numeric part, as a {@code long}.  If the iterator is not positioned on a numeric
+             * part (i.e. {@link #isNumberPart()} returns {@code false}), then an exception is thrown.  If the value
+             * overflows the maximum value for a {@code long}, then only the low-order 64 bits of the version number
+             * value are returned.
+             *
+             * @return the current numeric part as a {@code long}
+             * @throws IllegalStateException if the current token is not a numeric part
+             */
+            public long getNumberPartAsLong() {
+                final long cookie = this.cookie;
+                if (cookieToToken(cookie) != TOK_PART_NUMBER) {
+                    throw new IllegalStateException();
+                }
+                long total = 0L;
+                final int start = cookieToStartIndex(cookie);
+                final int end = cookieToEndIndex(cookie);
+                for (int i = start; i < end; i = version.offsetByCodePoints(i, 1)) {
+                    total = total * 10 + Character.digit(version.codePointAt(i), 10);
+                }
+                return total;
+            }
+
+            /**
+             * Get the current numeric part, as an {@code int}.  If the iterator is not positioned on a numeric
+             * part (i.e. {@link #isNumberPart()} returns {@code false}), then an exception is thrown.  If the value
+             * overflows the maximum value for an {@code int}, then only the low-order 32 bits of the version number
+             * value are returned.
+             *
+             * @return the current numeric part as an {@code int}
+             * @throws IllegalStateException if the current token is not a numeric part
+             */
+            public int getNumberPartAsInt() {
+                final long cookie = this.cookie;
+                if (cookieToToken(cookie) != TOK_PART_NUMBER) {
+                    throw new IllegalStateException();
+                }
+                int total = 0;
+                final int start = cookieToStartIndex(cookie);
+                final int end = cookieToEndIndex(cookie);
+                for (int i = start; i < end; i = version.offsetByCodePoints(i, 1)) {
+                    total = total * 10 + Character.digit(version.codePointAt(i), 10);
+                }
+                return total;
+            }
+
+            /**
+             * Get the current numeric part, as a {@code BigInteger}.  If the iterator is not positioned on a numeric
+             * part (i.e. {@link #isNumberPart()} returns {@code false}), then an exception is thrown.
+             *
+             * @return the current numeric part as a {@code BigInteger}
+             * @throws IllegalStateException if the current token is not a numeric part
+             */
+            public BigInteger getNumberPartAsBigInteger() {
+                final long cookie = this.cookie;
+                if (cookieToToken(cookie) != TOK_PART_NUMBER) {
+                    throw new IllegalStateException();
+                }
+                return new BigInteger(version.substring(cookieToStartIndex(cookie), cookieToEndIndex(cookie)));
+            }
+        }
     }
 
 
