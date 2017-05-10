@@ -334,6 +334,31 @@ public final class ModuleLayer {
 
             return this;
         }
+
+        /**
+         * Updates module {@code source} in the layer to contain a new package.
+         * This method is a no-op if {@code source} already contains package {@code pn}.
+         *
+         * @param  source
+         *         The source module
+         * @param  pn
+         *         The package name to add
+         *
+         * @return This controller
+         *
+         * @throws IllegalArgumentException
+         *         If {@code pn} is {@code null}, or {@code source} is not in the layer
+         */
+        public Controller addPackage(Module source, String pn) {
+            Objects.requireNonNull(source);
+            if (pn == null)
+                throw new IllegalArgumentException("package is null");
+            if (source.isNamed()) {
+                ensureInLayer(source);
+                source.implAddPackage(pn, true);
+            }
+            return this;
+        }
     }
 
 

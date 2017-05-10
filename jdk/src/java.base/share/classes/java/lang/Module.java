@@ -1016,7 +1016,7 @@ public final class Module implements AnnotatedElement {
      * @throws IllegalArgumentException if the package name is not legal
      * @throws IllegalStateException if the package is defined to another module
      */
-    private void implAddPackage(String pn, boolean syncVM) {
+    void implAddPackage(String pn, boolean syncVM) {
         // no-op if unnamed module
         if (!isNamed())
             return;
