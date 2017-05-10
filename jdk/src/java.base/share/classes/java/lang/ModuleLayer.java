@@ -304,6 +304,36 @@ public final class ModuleLayer {
 
             return this;
         }
+
+        /**
+         * Updates module {@code source} in the layer to add a
+         * service dependence on the given service type. This method is
+         * a no-op when invoked on an unnamed module or an automatic module.
+         *
+         * @param  source
+         *         The source module
+         * @param  service
+         *         The service type
+         *
+         * @return this module
+         *
+         * @throws IllegalStateException
+         *         If this is a named module and the caller is not this module
+         *
+         * @see Module#addUses(Class)
+         * @see ModuleDescriptor#uses()
+         */
+        public Controller addUses(Module source, Class<?> service) {
+            Objects.requireNonNull(source);
+            Objects.requireNonNull(service);
+
+            if (source.isNamed() && ! source.getDescriptor().isAutomatic()) {
+                ensureInLayer(source);
+                source.implAddUses(service);
+            }
+
+            return this;
+        }
     }
 
 
