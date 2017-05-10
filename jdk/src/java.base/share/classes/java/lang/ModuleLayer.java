@@ -48,6 +48,7 @@ import jdk.internal.loader.ClassLoaderValue;
 import jdk.internal.loader.Loader;
 import jdk.internal.loader.LoaderPool;
 import jdk.internal.module.ServicesCatalog;
+import jdk.internal.reflect.Reflection;
 import sun.security.util.SecurityConstants;
 
 
@@ -267,6 +268,40 @@ public final class ModuleLayer {
         public Controller addOpens(Module source, String pn, Module target) {
             ensureInLayer(source);
             source.implAddOpens(pn, target);
+            return this;
+        }
+
+        /**
+         * Updates module {@code source} in the layer to export a package to
+         * module {@code target}. This method is a no-op if {@code source}
+         * already exports the package to at least {@code target}.
+         *
+         * @param  source
+         *         The source module
+         * @param  pn
+         *         The package name
+         * @param  other
+         *         The module to export to
+         *
+         * @return This controller
+         *
+         * @throws IllegalArgumentException
+         *         If {@code pn} is {@code null}, or {@code source} is not in the layer
+         *         or the package is not in the source module
+         *
+         * @see Module#addExports
+         */
+        public Controller addExports(Module source, String pn, Module other) {
+            if (pn == null)
+                throw new IllegalArgumentException("package is null");
+            Objects.requireNonNull(source);
+            Objects.requireNonNull(other);
+
+            if (source.isNamed()) {
+                ensureInLayer(source);
+                source.implAddExports(pn, other);
+            }
+
             return this;
         }
     }
