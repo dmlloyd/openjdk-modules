@@ -288,6 +288,8 @@ public final class Graph<T> {
         }
     }
 
+    private static final boolean DETECT_CYCLES = Boolean.parseBoolean(System.getProperty("jdk.module.detect-cycles", "true"));
+
     /**
      * Topological sort
      */
@@ -322,7 +324,7 @@ public final class Graph<T> {
 
         private void visit(T node, Deque<T> visited, Deque<T> done) {
             if (visited.contains(node)) {
-                if (!done.contains(node)) {
+                if (DETECT_CYCLES && !done.contains(node)) {
                     throw new IllegalArgumentException("Cyclic detected: " +
                         node + " " + graph.edges().get(node));
                 }

@@ -105,11 +105,13 @@ public final class ModuleSorter {
         return result.stream();
     }
 
+    private static final boolean DETECT_CYCLES = Boolean.parseBoolean(System.getProperty("jdk.module.detect-cycles", "true"));
+
     private void visit(ResourcePoolModule node,
                        Deque<ResourcePoolModule> visited,
                        Deque<ResourcePoolModule> done) {
         if (visited.contains(node)) {
-            if (!done.contains(node)) {
+            if (DETECT_CYCLES && !done.contains(node)) {
                 throw new IllegalArgumentException("Cyclic detected: " +
                     node + " " + edges.get(node.name()));
             }

@@ -351,6 +351,8 @@ final class Resolver {
         }
     }
 
+    private static final boolean DETECT_CYCLES = Boolean.parseBoolean(System.getProperty("jdk.module.detect-cycles", "true"));
+
     /**
      * Execute post-resolution checks and returns the module graph of resolved
      * modules as {@code Map}. The resolved modules will be in the given
@@ -362,7 +364,7 @@ final class Resolver {
                                                     boolean check)
     {
         if (check) {
-            detectCycles();
+            if (DETECT_CYCLES) detectCycles();
             checkHashes();
         }
 
