@@ -85,6 +85,8 @@ public final class ModuleLoaderMap {
         return platformModules;
     }
 
+    private static final boolean ISOLATED_MODULE_PATH = Boolean.parseBoolean(System.getProperty("jdk.module.isolated", "false"));
+
     /**
      * Returns the function to map modules in the given configuration to the
      * built-in class loaders.
@@ -102,6 +104,8 @@ public final class ModuleLoaderMap {
             if (!bootModules.contains(mn)) {
                 if (platformModules.contains(mn)) {
                     map.put(mn, platformClassLoader);
+                } else if (ISOLATED_MODULE_PATH) {
+                    map.put(mn, ClassLoaders.appModuleClassLoader());
                 } else {
                     map.put(mn, appClassLoader);
                 }

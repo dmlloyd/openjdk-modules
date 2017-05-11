@@ -112,6 +112,15 @@ public class ClassLoaders {
     }
 
     /**
+     * Returns a new isolated application module class loader.
+     *
+     * @return the new application module class loader (not {@code null})
+     */
+    public static ClassLoader appModuleClassLoader() {
+        return new AppModuleClassLoader(APP_LOADER);
+    }
+
+    /**
      * The class loader that is used to find resources in modules defined to
      * the boot class loader. It is not used for class loading.
      */
@@ -216,6 +225,21 @@ public class ClassLoaders {
          */
         protected Package defineOrCheckPackage(String pn, Manifest man, URL url) {
             return super.defineOrCheckPackage(pn, man, url);
+        }
+    }
+
+    /**
+     * An isolated application module class loader that is a {@code BuiltinClassLoader} with
+     * the application class loader as parent.
+     */
+    private static class AppModuleClassLoader extends BuiltinClassLoader {
+        static {
+            if (!ClassLoader.registerAsParallelCapable())
+                throw new InternalError();
+        }
+
+        AppModuleClassLoader(AppClassLoader parent) {
+            super("app", parent, null);
         }
     }
 
