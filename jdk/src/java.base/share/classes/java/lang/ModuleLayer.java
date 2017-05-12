@@ -350,13 +350,20 @@ public final class ModuleLayer {
          *         If {@code pn} is {@code null}, or {@code source} is not in the layer,
          *         or the given package name is empty or not syntactically valid,
          *         or the given package name is already defined to a different module in
-         *         this class loader
+         *         this class loader, or the class loader of {@code source} is the
+         *         bootstrap class loader
          */
         public Controller addPackage(Module source, String pn) {
             Objects.requireNonNull(source);
             validatePackageName(pn);
             if (source.isNamed()) {
                 ensureInLayer(source);
+                ClassLoader classLoader = source.getClassLoaderPrivate();
+                if (classLoader == null) {
+                    // InternalError?
+                    throw new IllegalArgumentException("Cannot add packages to the bootstrap class loader");
+                }
+                classLoader.requirePackageInModule(pn, source);
                 source.implAddPackage(pn, true);
             }
             return this;

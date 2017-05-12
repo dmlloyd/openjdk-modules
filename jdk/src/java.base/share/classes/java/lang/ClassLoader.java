@@ -2056,6 +2056,27 @@ public abstract class ClassLoader {
         return (Package)packages.compute(name, (n, p) -> toPackage(n, p, m));
     }
 
+    NamedPackage requirePackageInModule(String name, Module m) {
+        if (name.isEmpty() && m.isNamed()) {
+            throw new InternalError("unnamed package in  " + m);
+        }
+
+        NamedPackage pkg = packages.get(name);
+        if (pkg == null) {
+            pkg = new NamedPackage(name, m);
+            final NamedPackage appearing = packages.putIfAbsent(name, pkg);
+            if (appearing != null) {
+                pkg = appearing;
+            }
+        }
+        if (pkg.module() != m) {
+            throw new IllegalArgumentException("Package \"" + name +
+                "\" cannot be added to module \"" + m.getName() +
+                "\" because it was already defined");
+        }
+        return pkg;
+    }
+
     /*
      * Returns a Package object for the named package
      */

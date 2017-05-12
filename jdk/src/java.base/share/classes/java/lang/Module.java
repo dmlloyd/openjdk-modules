@@ -206,6 +206,15 @@ public final class Module implements AnnotatedElement {
     }
 
     /**
+     * Get the class loader of the module without a security manager check.
+     *
+     * @return the class loader
+     */
+    ClassLoader getClassLoaderPrivate() {
+        return loader;
+    }
+
+    /**
      * Returns the module descriptor for this module or {@code null} if this
      * module is an unnamed module.
      *
