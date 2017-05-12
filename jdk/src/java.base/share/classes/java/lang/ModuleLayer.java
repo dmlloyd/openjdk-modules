@@ -347,17 +347,60 @@ public final class ModuleLayer {
          * @return This controller
          *
          * @throws IllegalArgumentException
-         *         If {@code pn} is {@code null}, or {@code source} is not in the layer
+         *         If {@code pn} is {@code null}, or {@code source} is not in the layer,
+         *         or the given package name is empty or not syntactically valid,
+         *         or the given package name is already defined to a different module in
+         *         this class loader
          */
         public Controller addPackage(Module source, String pn) {
             Objects.requireNonNull(source);
-            if (pn == null)
-                throw new IllegalArgumentException("package is null");
+            validatePackageName(pn);
             if (source.isNamed()) {
                 ensureInLayer(source);
                 source.implAddPackage(pn, true);
             }
             return this;
+        }
+
+        /**
+         * Ensure that the package name is syntactically valid.
+         *
+         * @param pn the package name
+         */
+        private static void validatePackageName(String pn) {
+            if (pn == null)
+                throw new IllegalArgumentException("package is null");
+            int next = 0;
+            int cp;
+            for (;;) {
+                if (next == pn.length()) {
+                    // each segment must start with one identifier cp
+                    throw nameIsInvalid(pn);
+                }
+                cp = pn.codePointAt(next);
+                next = pn.offsetByCodePoints(next, 1);
+                if (! Character.isJavaIdentifierStart(cp)) {
+                    throw nameIsInvalid(pn);
+                }
+                for (;;) {
+                    if (next == pn.length()) {
+                        // OK
+                        return;
+                    }
+                    cp = pn.codePointAt(next);
+                    next = pn.offsetByCodePoints(next, 1);
+                    if (cp == '.') {
+                        // separator; loop around for the next segment
+                        break;
+                    } else if (! Character.isJavaIdentifierPart(cp)) {
+                        throw nameIsInvalid(pn);
+                    }
+                }
+            }
+        }
+
+        private static IllegalArgumentException nameIsInvalid(String name) {
+            return new IllegalArgumentException("Invalid package name \"" + name + "\"");
         }
     }
 
