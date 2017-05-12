@@ -252,6 +252,10 @@ public final class DefaultImageBuilder implements ImageBuilder {
      * @throws IOException
      */
     protected void prepareApplicationFiles(ResourcePool imageContent) throws IOException {
+        boolean detectCycles = Boolean.parseBoolean(System.getProperty("jdk.module.detect-cycles", "true"));
+        boolean isolated = Boolean.parseBoolean(System.getProperty("jdk.module.isolated", "false"));
+        boolean options = ! detectCycles || isolated;
+
         // generate launch scripts for the modules with a main class
         for (Map.Entry<String, String> entry : launchers.entrySet()) {
             String launcherEntry = entry.getValue();
@@ -291,8 +295,15 @@ public final class DefaultImageBuilder implements ImageBuilder {
                 StringBuilder sb = new StringBuilder();
                 sb.append("#!/bin/sh")
                         .append("\n");
-                sb.append("JLINK_VM_OPTIONS=")
-                        .append("\n");
+                sb.append("JLINK_VM_OPTIONS=");
+                if (options) {
+                    sb.append('"');
+                    if (! detectCycles) sb.append("-Djdk.module.detect-cycles=false");
+                    if (isolated && ! detectCycles) sb.append(' ');
+                    if (isolated) sb.append("-Djdk.module.isolated=true");
+                    sb.append('"');
+                }
+                sb.append("\n");
                 sb.append("DIR=`dirname $0`")
                         .append("\n");
                 sb.append("$DIR/java $JLINK_VM_OPTIONS -m ")
@@ -315,8 +326,10 @@ public final class DefaultImageBuilder implements ImageBuilder {
                     sb = new StringBuilder();
                     sb.append("@echo off")
                             .append("\r\n");
-                    sb.append("set JLINK_VM_OPTIONS=")
-                            .append("\r\n");
+                    sb.append("set JLINK_VM_OPTIONS=");
+                    if (! detectCycles) sb.append("-Djdk.module.detect-cycles=false ");
+                    if (isolated) sb.append("-Djdk.module.isolated=true");
+                    sb.append("\r\n");
                     sb.append("set DIR=%~dp0")
                             .append("\r\n");
                     sb.append("\"%DIR%\\java\" %JLINK_VM_OPTIONS% -m ")
