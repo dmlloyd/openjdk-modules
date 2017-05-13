@@ -27,6 +27,7 @@ package jdk.internal.module;
 
 import java.lang.module.Configuration;
 import java.lang.module.ResolvedModule;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -85,7 +86,23 @@ public final class ModuleLoaderMap {
         return platformModules;
     }
 
-    private static final boolean ISOLATED_MODULE_PATH = Boolean.parseBoolean(System.getProperty("jdk.module.isolated", "false"));
+    private static final Set<String> ISOLATED_MODULES;
+
+    static {
+        final String strVal = System.getProperty("jdk.module.isolated", "");
+        Set<String> set = new HashSet<>();
+        for (String name : strVal.split("\\s*,\\s*")) {
+            if (! name.isEmpty()) {
+                if (name.equals("ALL-MODULE-PATH")) {
+                    set = Collections.singleton("ALL-MODULE-PATH");
+                    break;
+                } else {
+                    set.add(name);
+                }
+            }
+        }
+        ISOLATED_MODULES = set.isEmpty() ? Collections.emptySet() : set;
+    }
 
     /**
      * Returns the function to map modules in the given configuration to the
@@ -104,7 +121,7 @@ public final class ModuleLoaderMap {
             if (!bootModules.contains(mn)) {
                 if (platformModules.contains(mn)) {
                     map.put(mn, platformClassLoader);
-                } else if (ISOLATED_MODULE_PATH) {
+                } else if (ISOLATED_MODULES.contains(mn) || ISOLATED_MODULES.contains("ALL-MODULE-PATH")) {
                     map.put(mn, ClassLoaders.appModuleClassLoader());
                 } else {
                     map.put(mn, appClassLoader);
