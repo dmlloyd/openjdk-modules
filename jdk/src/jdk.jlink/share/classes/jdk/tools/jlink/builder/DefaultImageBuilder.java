@@ -253,8 +253,8 @@ public final class DefaultImageBuilder implements ImageBuilder {
      */
     protected void prepareApplicationFiles(ResourcePool imageContent) throws IOException {
         boolean detectCycles = Boolean.parseBoolean(System.getProperty("jdk.module.detect-cycles", "true"));
-        boolean isolated = Boolean.parseBoolean(System.getProperty("jdk.module.isolated", "false"));
-        boolean options = ! detectCycles || isolated;
+        String isolatedStr = System.getProperty("jdk.module.isolated");
+        boolean options = ! detectCycles || isolatedStr != null;
 
         // generate launch scripts for the modules with a main class
         for (Map.Entry<String, String> entry : launchers.entrySet()) {
@@ -299,8 +299,8 @@ public final class DefaultImageBuilder implements ImageBuilder {
                 if (options) {
                     sb.append('"');
                     if (! detectCycles) sb.append("-Djdk.module.detect-cycles=false");
-                    if (isolated && ! detectCycles) sb.append(' ');
-                    if (isolated) sb.append("-Djdk.module.isolated=true");
+                    if (isolatedStr != null && ! detectCycles) sb.append(' ');
+                    if (isolatedStr != null) sb.append("-Djdk.module.isolated=").append(isolatedStr);
                     sb.append('"');
                 }
                 sb.append("\n");
@@ -328,7 +328,8 @@ public final class DefaultImageBuilder implements ImageBuilder {
                             .append("\r\n");
                     sb.append("set JLINK_VM_OPTIONS=");
                     if (! detectCycles) sb.append("-Djdk.module.detect-cycles=false ");
-                    if (isolated) sb.append("-Djdk.module.isolated=true");
+                    if (isolatedStr != null && ! detectCycles) sb.append(' ');
+                    if (isolatedStr != null) sb.append("-Djdk.module.isolated=").append(isolatedStr);
                     sb.append("\r\n");
                     sb.append("set DIR=%~dp0")
                             .append("\r\n");
